@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>USGS Seismic Map</title>
+  </head>
+  <body>
+    <div id="app">
+      <aside class="panel">
+        <div>
+          <p class="eyebrow">USGS Realtime Seismic Feed</p>
+          <h1>Global Earthquakes</h1>
+          <p class="panel-copy">
+            Live earthquake activity from USGS, refreshed automatically every 60 seconds.
+          </p>
+        </div>
+
+        <label class="control" for="feed-select">
+          <span>Feed</span>
+          <select id="feed-select" name="feed-select">
+            <option value="all_hour">All earthquakes, past hour</option>
+            <option value="all_day" selected>All earthquakes, past day</option>
+            <option value="significant_week">Significant earthquakes, past week</option>
+          </select>
+        </label>
+
+        <dl class="status-list">
+          <div>
+            <dt>Status</dt>
+            <dd id="status-text">Loading latest earthquakes...</dd>
+          </div>
+          <div>
+            <dt>Last updated</dt>
+            <dd id="updated-at">Waiting for first refresh</dd>
+          </div>
+          <div>
+            <dt>Visible quakes</dt>
+            <dd id="quake-count">0</dd>
+          </div>
+        </dl>
+
+        <div class="legend" aria-label="Magnitude legend">
+          <p>Magnitude</p>
+          <div class="legend-scale">
+            <span class="dot dot-sm"></span>
+            <span class="dot dot-md"></span>
+            <span class="dot dot-lg"></span>
+          </div>
+          <div class="legend-labels">
+            <span>1.0+</span>
+            <span>3.0+</span>
+            <span>5.0+</span>
+          </div>
+        </div>
+      </aside>
+
+      <main id="map" aria-label="Earthquake map"></main>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
