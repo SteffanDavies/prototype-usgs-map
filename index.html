@@ -7,52 +7,76 @@
   </head>
   <body>
     <div id="app">
-      <aside class="panel">
-        <div>
-          <p class="eyebrow">USGS Realtime Seismic Feed</p>
-          <h1>Global Earthquakes</h1>
-          <p class="panel-copy">
-            Live earthquake activity from USGS, refreshed automatically every 60 seconds.
-          </p>
+      <aside class="panel" id="side-panel">
+        <div class="panel-top">
+          <div class="panel-header-row">
+            <div class="panel-header">
+              <p class="eyebrow">USGS Realtime Seismic Feed</p>
+              <h1>Global Earthquakes</h1>
+              <p class="panel-copy">
+                Live earthquake activity from USGS, refreshed automatically every 60 seconds.
+              </p>
+            </div>
+
+            <button id="panel-toggle" class="panel-toggle" type="button" aria-expanded="true" aria-controls="panel-body">
+              Hide Feed
+            </button>
+          </div>
+
+          <div id="panel-body" class="panel-body">
+            <label class="control" for="feed-select">
+              <span>Feed</span>
+              <select id="feed-select" name="feed-select">
+              </select>
+            </label>
+
+            <dl class="status-list">
+              <div>
+                <dt>Status</dt>
+                <dd id="status-text">Loading latest earthquakes...</dd>
+              </div>
+              <div>
+                <dt>Last updated</dt>
+                <dd id="updated-at">Waiting for first refresh</dd>
+              </div>
+              <div>
+                <dt>Visible quakes</dt>
+                <dd id="quake-count">0</dd>
+              </div>
+            </dl>
+
+            <div class="legend" aria-label="Magnitude legend">
+              <p>Magnitude</p>
+              <div class="legend-scale">
+                <span class="dot dot-sm"></span>
+                <span class="dot dot-md"></span>
+                <span class="dot dot-lg"></span>
+              </div>
+              <div class="legend-labels">
+                <span>1.0+</span>
+                <span>3.0+</span>
+                <span>5.0+</span>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <label class="control" for="feed-select">
-          <span>Feed</span>
-          <select id="feed-select" name="feed-select">
-            <option value="all_hour">All earthquakes, past hour</option>
-            <option value="all_day" selected>All earthquakes, past day</option>
-            <option value="significant_week">Significant earthquakes, past week</option>
-          </select>
-        </label>
+        <section class="details-shell" aria-label="Selected earthquake details">
+          <div class="details-heading">
+            <div>
+              <p class="eyebrow">Selected Earthquake</p>
+              <h2 id="selection-title">Inspect USGS event data</h2>
+            </div>
+            <p id="selection-subtitle" class="details-subtitle">
+              Select an earthquake on the map to inspect summary fields, detail products, and raw JSON.
+            </p>
+          </div>
 
-        <dl class="status-list">
-          <div>
-            <dt>Status</dt>
-            <dd id="status-text">Loading latest earthquakes...</dd>
-          </div>
-          <div>
-            <dt>Last updated</dt>
-            <dd id="updated-at">Waiting for first refresh</dd>
-          </div>
-          <div>
-            <dt>Visible quakes</dt>
-            <dd id="quake-count">0</dd>
-          </div>
-        </dl>
+          <div id="selection-presence" class="banner" hidden></div>
+          <div id="detail-status" class="banner banner-muted">No earthquake selected.</div>
 
-        <div class="legend" aria-label="Magnitude legend">
-          <p>Magnitude</p>
-          <div class="legend-scale">
-            <span class="dot dot-sm"></span>
-            <span class="dot dot-md"></span>
-            <span class="dot dot-lg"></span>
-          </div>
-          <div class="legend-labels">
-            <span>1.0+</span>
-            <span>3.0+</span>
-            <span>5.0+</span>
-          </div>
-        </div>
+          <div id="details-content" class="details-content"></div>
+        </section>
       </aside>
 
       <main id="map" aria-label="Earthquake map"></main>
