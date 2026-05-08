@@ -1,6 +1,7 @@
 import './style.css'
 import maplibregl from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
+import shp from 'shpjs'
 
 const FEEDS = {
   significant_hour: makeFeed('Significant earthquakes, past hour', 'significant_hour'),
@@ -29,6 +30,22 @@ const REFRESH_INTERVAL_MS = 60_000
 const EARTHQUAKE_SOURCE_ID = 'earthquakes'
 const SELECTED_SOURCE_ID = 'selected-earthquake'
 const DEFAULT_FEED = 'all_month'
+const SHAKEMAP_LAYER_KEYS = ['affected', 'contours', 'rupture']
+const SHAKEMAP_LAYER_LABELS = {
+  affected: 'Affected Area',
+  contours: 'Intensity Contours',
+  rupture: 'Rupture',
+}
+const SHAKEMAP_SOURCE_IDS = {
+  affected: 'shakemap-affected',
+  contours: 'shakemap-contours',
+  rupture: 'shakemap-rupture',
+}
+const SHAKEMAP_LAYER_IDS = {
+  affected: ['shakemap-affected-fill', 'shakemap-affected-line'],
+  contours: ['shakemap-contours-line'],
+  rupture: ['shakemap-rupture-fill', 'shakemap-rupture-line', 'shakemap-rupture-circle'],
+}
 
 const SECTION_GLOSSARY = {
   Overview: {
@@ -66,6 +83,20 @@ const SECTION_GLOSSARY = {
     entries: [
       makeGlossaryEntry('The event page is the human-readable USGS page for the earthquake.', 'url', 'Summary feed, detail endpoint'),
       makeGlossaryEntry('The detail endpoint is the machine-readable per-event GeoJSON record with products.', 'detail', 'Summary feed'),
+    ],
+  },
+  ShakeMap: {
+    intro: 'ShakeMap assets describe estimated ground shaking for the selected earthquake. Vector layers can be toggled from the separate map layer control.',
+    entries: [
+      makeGlossaryEntry('Affected Area is loaded from the ShakeMap shapefile package and is best suited for overlay and spatial analysis.', 'download/shape.zip', 'Detail product metadata'),
+      makeGlossaryEntry('Intensity Contours are isolines of equal shaking intensity, typically from cont_mmi.json.', 'download/cont_mmi.json', 'Detail product metadata'),
+      makeGlossaryEntry('Rupture is the source geometry published with the event when available.', 'download/rupture.json', 'Detail product metadata'),
+    ],
+  },
+  'Selected ShakeMap Feature': {
+    intro: 'This section shows the properties of the currently clicked ShakeMap geometry on the map.',
+    entries: [
+      makeGlossaryEntry('Feature attributes vary by layer type. Intensity polygons and contours often expose intensity value, color, and weight.', 'feature.properties', 'Derived vector layer'),
     ],
   },
   'Detail Products': {
@@ -116,6 +147,10 @@ const FIELD_GLOSSARY = {
   Types: makeGlossaryEntry('Comma-delimited list of available USGS product types for the event.', 'types', 'Summary feed, detail endpoint'),
   'USGS event page': makeGlossaryEntry('Human-readable USGS event webpage.', 'url', 'Summary feed, detail endpoint'),
   'USGS detail endpoint': makeGlossaryEntry('Machine-readable USGS GeoJSON detail record used to fetch products.', 'detail', 'Summary feed'),
+  'Product source': makeGlossaryEntry('Publisher of the preferred ShakeMap product.', 'source', 'Detail product metadata'),
+  'Product code': makeGlossaryEntry('Code associated with the preferred ShakeMap product.', 'code', 'Detail product metadata'),
+  'Product status': makeGlossaryEntry('Lifecycle state for the preferred ShakeMap product.', 'status', 'Detail product metadata'),
+  'Product update': makeGlossaryEntry('When the preferred ShakeMap product was last updated.', 'updateTime', 'Detail product metadata'),
   Source: makeGlossaryEntry('Producer of the detail product entry.', 'source', 'Detail product metadata'),
   'Update time': makeGlossaryEntry('When the product entry was last updated.', 'updateTime', 'Detail product metadata'),
   'Preferred weight': makeGlossaryEntry('Ranking hint used to determine the preferred product among competing versions.', 'preferredWeight', 'Detail product metadata'),
@@ -137,9 +172,18 @@ const detailStatus = document.querySelector('#detail-status')
 const detailsContent = document.querySelector('#details-content')
 const sidePanel = document.querySelector('#side-panel')
 const panelToggle = document.querySelector('#panel-toggle')
+const layerControlToggle = document.querySelector('#layer-control-toggle')
+const layerControlPanel = document.querySelector('#layer-control-panel')
+const layerControlStatus = document.querySelector('#layer-control-status')
+const layerInputs = {
+  affected: document.querySelector('#toggle-affected'),
+  contours: document.querySelector('#toggle-contours'),
+  rupture: document.querySelector('#toggle-rupture'),
+}
 
 let refreshTimer
 let hoverPopup = null
+let shakeMapHoverPopup = null
 let activeFeed = DEFAULT_FEED
 let latestFeedData = emptyFeatureCollection()
 let selectionRequestId = 0
@@ -151,6 +195,8 @@ const selectionState = {
   detailError: '',
   presentInActiveFeed: false,
 }
+
+const shakeMapState = createEmptyShakeMapState()
 
 populateFeedOptions()
 feedSelect.value = DEFAULT_FEED
@@ -172,6 +218,18 @@ panelToggle.addEventListener('click', () => {
   window.setTimeout(() => map.resize(), 180)
 })
 
+layerControlToggle.addEventListener('click', () => {
+  const expanded = layerControlPanel.hidden
+  layerControlPanel.hidden = !expanded
+  layerControlToggle.setAttribute('aria-expanded', String(expanded))
+})
+
+Object.entries(layerInputs).forEach(([kind, input]) => {
+  input.addEventListener('change', async (event) => {
+    await setShakeMapLayerEnabled(kind, event.target.checked)
+  })
+})
+
 map.on('load', async () => {
   map.addSource(EARTHQUAKE_SOURCE_ID, {
     type: 'geojson',
@@ -182,6 +240,13 @@ map.on('load', async () => {
   map.addSource(SELECTED_SOURCE_ID, {
     type: 'geojson',
     data: emptyFeatureCollection(),
+  })
+
+  SHAKEMAP_LAYER_KEYS.forEach((kind) => {
+    map.addSource(SHAKEMAP_SOURCE_IDS[kind], {
+      type: 'geojson',
+      data: emptyFeatureCollection(),
+    })
   })
 
   map.addLayer({
@@ -232,29 +297,8 @@ map.on('load', async () => {
     },
   })
 
-  map.on('mouseenter', 'earthquake-circles', (event) => {
-    map.getCanvas().style.cursor = 'pointer'
-    showHoverPopup(event)
-  })
-
-  map.on('mousemove', 'earthquake-circles', (event) => {
-    showHoverPopup(event)
-  })
-
-  map.on('mouseleave', 'earthquake-circles', () => {
-    map.getCanvas().style.cursor = ''
-    clearHoverPopup()
-  })
-
-  map.on('click', 'earthquake-circles', (event) => {
-    const feature = event.features?.[0]
-    if (!feature) {
-      return
-    }
-
-    clearHoverPopup()
-    selectFeature(feature)
-  })
+  addShakeMapLayers()
+  bindMapInteractions()
 
   await refreshFeed()
   startPolling()
@@ -268,6 +312,7 @@ feedSelect.addEventListener('change', async (event) => {
 })
 
 renderSelectionPanel()
+renderLayerControl()
 
 async function refreshFeed() {
   const source = map.getSource(EARTHQUAKE_SOURCE_ID)
@@ -325,7 +370,9 @@ function selectFeature(feature) {
   selectionState.detailError = ''
   selectionState.presentInActiveFeed = true
   updateSelectedSource()
+  resetShakeMapState('Loading ShakeMap assets for the selected earthquake...')
   renderSelectionPanel()
+  renderLayerControl()
   loadFeatureDetail(feature, selectionRequestId)
 }
 
@@ -334,7 +381,9 @@ async function loadFeatureDetail(feature, requestId) {
   if (!detailUrl) {
     selectionState.detailState = 'error'
     selectionState.detailError = 'No detail endpoint was provided for this event.'
+    resetShakeMapState('No ShakeMap data available because the event detail endpoint is missing.')
     renderSelectionPanel()
+    renderLayerControl()
     return
   }
 
@@ -357,7 +406,9 @@ async function loadFeatureDetail(feature, requestId) {
     selectionState.detail = detail
     selectionState.detailState = 'success'
     selectionState.detailError = ''
+    await configureShakeMap(detail, requestId)
     renderSelectionPanel()
+    renderLayerControl()
   } catch (error) {
     console.error(error)
     if (requestId !== selectionRequestId) {
@@ -367,11 +418,312 @@ async function loadFeatureDetail(feature, requestId) {
     selectionState.detail = null
     selectionState.detailState = 'error'
     selectionState.detailError = error.message
+    resetShakeMapState('Detail request failed before ShakeMap assets could be inspected.')
     renderSelectionPanel()
+    renderLayerControl()
   }
 }
 
-function showHoverPopup(event) {
+async function configureShakeMap(detail, requestId) {
+  resetShakeMapState('Inspecting ShakeMap product contents...')
+
+  const product = getPreferredShakeMapProduct(detail)
+  if (!product) {
+    shakeMapState.status = 'No ShakeMap is available for this earthquake.'
+    renderSelectionPanel()
+    renderLayerControl()
+    return
+  }
+
+  shakeMapState.product = product
+  shakeMapState.assets = classifyShakeMapAssets(product.contents ?? {})
+  shakeMapState.available = Object.values(shakeMapState.assets).some(Boolean)
+  shakeMapState.status = shakeMapState.available
+    ? 'ShakeMap vector assets are available. Toggle them from this layer control.'
+    : 'ShakeMap exists for this event, but no supported vector layers were detected.'
+  shakeMapState.toggles = {
+    affected: Boolean(shakeMapState.assets.affected),
+    contours: false,
+    rupture: false,
+  }
+
+  renderSelectionPanel()
+  renderLayerControl()
+
+  if (requestId !== selectionRequestId) {
+    return
+  }
+
+  if (shakeMapState.toggles.affected) {
+    await setShakeMapLayerEnabled('affected', true)
+  }
+}
+
+async function setShakeMapLayerEnabled(kind, enabled) {
+  if (!shakeMapState.assets[kind]) {
+    shakeMapState.toggles[kind] = false
+    renderLayerControl()
+    return
+  }
+
+  shakeMapState.toggles[kind] = enabled
+
+  if (!enabled) {
+    setMapLayerVisibility(kind, false)
+    if (shakeMapState.selectedFeature?.kind === kind) {
+      shakeMapState.selectedFeature = null
+      renderSelectionPanel()
+    }
+    renderLayerControl()
+    return
+  }
+
+  try {
+    layerControlStatus.textContent = `Loading ${SHAKEMAP_LAYER_LABELS[kind].toLowerCase()}...`
+    renderLayerControl()
+    await ensureShakeMapLayerLoaded(kind)
+    setMapLayerVisibility(kind, true)
+    shakeMapState.status = `${SHAKEMAP_LAYER_LABELS[kind]} is visible.`
+  } catch (error) {
+    console.error(error)
+    shakeMapState.toggles[kind] = false
+    shakeMapState.status = `Unable to load ${SHAKEMAP_LAYER_LABELS[kind].toLowerCase()} right now.`
+  }
+
+  renderSelectionPanel()
+  renderLayerControl()
+}
+
+async function ensureShakeMapLayerLoaded(kind) {
+  if (shakeMapState.data[kind]) {
+    return
+  }
+
+  if (shakeMapState.loading[kind]) {
+    await shakeMapState.loading[kind]
+    return
+  }
+
+  const url = shakeMapState.assets[kind]
+  if (!url) {
+    throw new Error(`No asset URL configured for ${kind}`)
+  }
+
+  shakeMapState.loading[kind] = loadShakeMapData(kind, url)
+  const data = await shakeMapState.loading[kind]
+  shakeMapState.data[kind] = data
+  shakeMapState.loading[kind] = null
+  setShakeMapSourceData(kind, data)
+}
+
+async function loadShakeMapData(kind, url) {
+  if (kind === 'affected') {
+    const response = await fetch(url)
+    if (!response.ok) {
+      throw new Error(`ShakeMap asset request failed with ${response.status}`)
+    }
+
+    const buffer = await response.arrayBuffer()
+    const parsed = await shp(buffer)
+    const collection = extractAffectedCollection(parsed)
+    return normalizeShakeMapFeatureCollection(collection, kind)
+  }
+
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/geo+json, application/json',
+    },
+  })
+
+  if (!response.ok) {
+    throw new Error(`ShakeMap asset request failed with ${response.status}`)
+  }
+
+  const data = await response.json()
+  return normalizeShakeMapFeatureCollection(data, kind)
+}
+
+function extractAffectedCollection(parsed) {
+  if (parsed?.type === 'FeatureCollection') {
+    return parsed
+  }
+
+  if (Array.isArray(parsed)) {
+    return parsed.find((item) => item?.type === 'FeatureCollection') ?? emptyFeatureCollection()
+  }
+
+  if (parsed && typeof parsed === 'object') {
+    const preferredEntry = Object.entries(parsed).find(([key, value]) => key.toLowerCase() === 'mi' && value?.type === 'FeatureCollection')
+    if (preferredEntry) {
+      return preferredEntry[1]
+    }
+
+    const firstCollection = Object.values(parsed).find((value) => value?.type === 'FeatureCollection')
+    if (firstCollection) {
+      return firstCollection
+    }
+  }
+
+  return emptyFeatureCollection()
+}
+
+function normalizeShakeMapFeatureCollection(collection, kind) {
+  const features = (collection?.features ?? []).map((feature, index) => {
+    const properties = feature.properties ?? {}
+    const displayValue = resolveShakeMapValue(properties)
+    return {
+      ...feature,
+      properties: {
+        ...properties,
+        __featureId: properties.id ?? `${kind}-${index}`,
+        __layerKind: kind,
+        __displayValue: displayValue,
+        __displayLabel: describeShakeMapFeature(kind, properties, displayValue),
+        __displayColor: properties.color ?? colorForShakeMapValue(displayValue),
+        __displayWeight: normalizeNumber(properties.weight) ?? 2,
+      },
+    }
+  })
+
+  return {
+    type: 'FeatureCollection',
+    features,
+  }
+}
+
+function bindMapInteractions() {
+  map.on('mouseenter', 'earthquake-circles', (event) => {
+    map.getCanvas().style.cursor = 'pointer'
+    showEarthquakeHoverPopup(event)
+  })
+
+  map.on('mousemove', 'earthquake-circles', (event) => {
+    showEarthquakeHoverPopup(event)
+  })
+
+  map.on('mouseleave', 'earthquake-circles', () => {
+    map.getCanvas().style.cursor = ''
+    clearEarthquakeHoverPopup()
+  })
+
+  map.on('click', 'earthquake-circles', (event) => {
+    const feature = event.features?.[0]
+    if (!feature) {
+      return
+    }
+
+    clearEarthquakeHoverPopup()
+    selectFeature(feature)
+  })
+
+  Object.entries(SHAKEMAP_LAYER_IDS).forEach(([kind, layerIds]) => {
+    layerIds.forEach((layerId) => {
+      map.on('mouseenter', layerId, (event) => {
+        map.getCanvas().style.cursor = 'pointer'
+        showShakeMapHoverPopup(event, kind)
+      })
+
+      map.on('mousemove', layerId, (event) => {
+        showShakeMapHoverPopup(event, kind)
+      })
+
+      map.on('mouseleave', layerId, () => {
+        map.getCanvas().style.cursor = ''
+        clearShakeMapHoverPopup()
+      })
+
+      map.on('click', layerId, (event) => {
+        const feature = event.features?.[0]
+        if (!feature) {
+          return
+        }
+
+        clearShakeMapHoverPopup()
+        shakeMapState.selectedFeature = {
+          kind,
+          geometryType: feature.geometry?.type ?? 'Unknown geometry',
+          properties: feature.properties ?? {},
+        }
+        renderSelectionPanel()
+      })
+    })
+  })
+}
+
+function addShakeMapLayers() {
+  map.addLayer({
+    id: 'shakemap-affected-fill',
+    type: 'fill',
+    source: SHAKEMAP_SOURCE_IDS.affected,
+    layout: { visibility: 'none' },
+    paint: {
+      'fill-color': ['coalesce', ['get', '__displayColor'], '#f0b43c'],
+      'fill-opacity': 0.34,
+    },
+  })
+
+  map.addLayer({
+    id: 'shakemap-affected-line',
+    type: 'line',
+    source: SHAKEMAP_SOURCE_IDS.affected,
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': ['coalesce', ['get', '__displayColor'], '#8a5a12'],
+      'line-width': 1.5,
+      'line-opacity': 0.85,
+    },
+  })
+
+  map.addLayer({
+    id: 'shakemap-contours-line',
+    type: 'line',
+    source: SHAKEMAP_SOURCE_IDS.contours,
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': ['coalesce', ['get', '__displayColor'], '#245ec7'],
+      'line-width': ['coalesce', ['get', '__displayWeight'], 2],
+      'line-opacity': 0.9,
+    },
+  })
+
+  map.addLayer({
+    id: 'shakemap-rupture-fill',
+    type: 'fill',
+    source: SHAKEMAP_SOURCE_IDS.rupture,
+    layout: { visibility: 'none' },
+    paint: {
+      'fill-color': '#992247',
+      'fill-opacity': 0.18,
+    },
+  })
+
+  map.addLayer({
+    id: 'shakemap-rupture-line',
+    type: 'line',
+    source: SHAKEMAP_SOURCE_IDS.rupture,
+    layout: { visibility: 'none' },
+    paint: {
+      'line-color': '#992247',
+      'line-width': 3,
+      'line-opacity': 0.95,
+    },
+  })
+
+  map.addLayer({
+    id: 'shakemap-rupture-circle',
+    type: 'circle',
+    source: SHAKEMAP_SOURCE_IDS.rupture,
+    layout: { visibility: 'none' },
+    paint: {
+      'circle-color': '#992247',
+      'circle-radius': 5,
+      'circle-stroke-color': '#ffffff',
+      'circle-stroke-width': 1.5,
+    },
+  })
+}
+
+function showEarthquakeHoverPopup(event) {
   const feature = event.features?.[0]
   if (!feature) {
     return
@@ -402,9 +754,41 @@ function showHoverPopup(event) {
     .addTo(map)
 }
 
-function clearHoverPopup() {
+function showShakeMapHoverPopup(event, kind) {
+  const feature = event.features?.[0]
+  if (!feature) {
+    return
+  }
+
+  const label = feature.properties?.__displayLabel ?? SHAKEMAP_LAYER_LABELS[kind]
+
+  if (!shakeMapHoverPopup) {
+    shakeMapHoverPopup = new maplibregl.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 10,
+    })
+  }
+
+  shakeMapHoverPopup
+    .setLngLat(event.lngLat)
+    .setHTML(`
+      <article class="popup">
+        <p class="popup-kicker">${escapeHtml(SHAKEMAP_LAYER_LABELS[kind])}</p>
+        <h2>${escapeHtml(label)}</h2>
+      </article>
+    `)
+    .addTo(map)
+}
+
+function clearEarthquakeHoverPopup() {
   hoverPopup?.remove()
   hoverPopup = null
+}
+
+function clearShakeMapHoverPopup() {
+  shakeMapHoverPopup?.remove()
+  shakeMapHoverPopup = null
 }
 
 function updateSelectedSource() {
@@ -424,9 +808,28 @@ function updateSelectedSource() {
   })
 }
 
-function startPolling() {
-  window.clearInterval(refreshTimer)
-  refreshTimer = window.setInterval(refreshFeed, REFRESH_INTERVAL_MS)
+function setShakeMapSourceData(kind, data) {
+  const source = map.getSource(SHAKEMAP_SOURCE_IDS[kind])
+  source?.setData(data)
+}
+
+function setMapLayerVisibility(kind, visible) {
+  SHAKEMAP_LAYER_IDS[kind].forEach((layerId) => {
+    if (map.getLayer(layerId)) {
+      map.setLayoutProperty(layerId, 'visibility', visible ? 'visible' : 'none')
+    }
+  })
+}
+
+function resetShakeMapState(statusMessage) {
+  clearShakeMapHoverPopup()
+  Object.assign(shakeMapState, createEmptyShakeMapState())
+  shakeMapState.status = statusMessage
+
+  SHAKEMAP_LAYER_KEYS.forEach((kind) => {
+    setMapLayerVisibility(kind, false)
+    setShakeMapSourceData(kind, emptyFeatureCollection())
+  })
 }
 
 function renderSelectionPanel() {
@@ -434,7 +837,7 @@ function renderSelectionPanel() {
 
   if (!feature) {
     selectionTitle.textContent = 'Inspect USGS event data'
-    selectionSubtitle.textContent = 'Select an earthquake on the map to inspect summary fields, detail products, and raw JSON.'
+    selectionSubtitle.textContent = 'Select an earthquake on the map to inspect summary fields, detail products, raw JSON, and any ShakeMap vector layers.'
     detailStatus.textContent = 'No earthquake selected.'
     detailStatus.className = 'banner banner-muted'
     selectionPresence.hidden = true
@@ -513,6 +916,9 @@ function renderSelectionPanel() {
       makeRow('USGS event page', mergedProperties.url),
       makeRow('USGS detail endpoint', summaryProperties.detail),
     ]),
+    renderFieldSection('ShakeMap', buildShakeMapRows()),
+    renderLinksSection('ShakeMap Assets', buildShakeMapAssetRows()),
+    renderFieldSection('Selected ShakeMap Feature', buildSelectedShakeMapFeatureRows()),
     renderProductsSection(selectionState.detail?.properties?.products ?? null),
     renderJsonSection('Raw JSON', [
       ['Summary feature JSON', feature],
@@ -521,6 +927,22 @@ function renderSelectionPanel() {
   ]
 
   detailsContent.innerHTML = sections.filter(Boolean).join('')
+}
+
+function renderLayerControl() {
+  const selected = selectionState.feature
+
+  if (!selected) {
+    layerControlStatus.textContent = 'Select an earthquake with ShakeMap data.'
+  } else {
+    layerControlStatus.textContent = shakeMapState.status
+  }
+
+  SHAKEMAP_LAYER_KEYS.forEach((kind) => {
+    const input = layerInputs[kind]
+    input.disabled = !shakeMapState.assets[kind]
+    input.checked = Boolean(shakeMapState.toggles[kind] && shakeMapState.assets[kind])
+  })
 }
 
 function renderFieldSection(title, rows) {
@@ -532,7 +954,7 @@ function renderFieldSection(title, rows) {
           <div class="field-label">${escapeHtml(label)}</div>
           ${renderInlineHelp(helpKey ?? label)}
         </div>
-        <div class="field-value">${escapeHtml(String(value))}</div>
+        <div class="field-value">${escapeHtml(stringifyValue(value))}</div>
       </div>
     `)
     .join('')
@@ -583,7 +1005,7 @@ function renderProductsSection(products) {
   const productBlocks = Object.entries(products)
     .map(([productType, entries]) => {
       const entryList = Array.isArray(entries) ? entries : []
-      const renderedEntries = entryList
+      return entryList
         .map((entry, index) => {
           const propertyRows = Object.entries(entry.properties ?? {})
             .map(([key, value]) => `
@@ -591,7 +1013,7 @@ function renderProductsSection(products) {
                 <div class="field-label-row">
                   <div class="field-label">${escapeHtml(key)}</div>
                 </div>
-                <div class="field-value">${escapeHtml(String(value))}</div>
+                <div class="field-value">${escapeHtml(stringifyValue(value))}</div>
               </div>
             `)
             .join('')
@@ -626,8 +1048,6 @@ function renderProductsSection(products) {
           `
         })
         .join('')
-
-      return renderedEntries
     })
     .join('')
 
@@ -678,7 +1098,7 @@ function renderInlineField(label, value, helpKey = label) {
         <div class="field-label">${escapeHtml(label)}</div>
         ${renderInlineHelp(helpKey)}
       </div>
-      <div class="field-value">${escapeHtml(String(value))}</div>
+      <div class="field-value">${escapeHtml(stringifyValue(value))}</div>
     </div>
   `
 }
@@ -743,12 +1163,104 @@ function renderGlossaryEntry(entry) {
   `
 }
 
-function makeRow(label, value, helpKey = label) {
-  return { label, value, helpKey }
+function buildShakeMapRows() {
+  const rows = [
+    makeRow('Availability', shakeMapState.product ? (shakeMapState.available ? 'Vector assets available' : 'Product available, but no supported vectors found') : 'No ShakeMap available'),
+    makeRow('Visible layers', visibleShakeMapLayerLabels()),
+    makeRow('Product source', shakeMapState.product?.source, 'Product source'),
+    makeRow('Product code', shakeMapState.product?.code, 'Product code'),
+    makeRow('Product status', shakeMapState.product?.status, 'Product status'),
+    makeRow('Product update', formatTime(shakeMapState.product?.updateTime), 'Product update'),
+  ]
+
+  return rows
 }
 
-function makeGlossaryEntry(description, fieldKey, source) {
-  return { description, fieldKey, source }
+function buildShakeMapAssetRows() {
+  return SHAKEMAP_LAYER_KEYS
+    .filter((kind) => shakeMapState.assets[kind])
+    .map((kind) => makeRow(SHAKEMAP_LAYER_LABELS[kind], shakeMapState.assets[kind]))
+}
+
+function buildSelectedShakeMapFeatureRows() {
+  if (!shakeMapState.selectedFeature) {
+    return []
+  }
+
+  const rows = [
+    makeRow('Layer', SHAKEMAP_LAYER_LABELS[shakeMapState.selectedFeature.kind]),
+    makeRow('Geometry type', shakeMapState.selectedFeature.geometryType),
+  ]
+
+  Object.entries(shakeMapState.selectedFeature.properties)
+    .filter(([key]) => !key.startsWith('__'))
+    .forEach(([key, value]) => {
+      rows.push(makeRow(key, value))
+    })
+
+  return rows
+}
+
+function visibleShakeMapLayerLabels() {
+  const visible = SHAKEMAP_LAYER_KEYS.filter((kind) => shakeMapState.toggles[kind])
+  if (visible.length === 0) {
+    return 'None enabled'
+  }
+
+  return visible.map((kind) => SHAKEMAP_LAYER_LABELS[kind]).join(', ')
+}
+
+function getPreferredShakeMapProduct(detail) {
+  const entries = detail?.properties?.products?.shakemap
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return null
+  }
+
+  return [...entries].sort((left, right) => {
+    return (right.preferredWeight ?? 0) - (left.preferredWeight ?? 0) || (right.updateTime ?? 0) - (left.updateTime ?? 0)
+  })[0]
+}
+
+function classifyShakeMapAssets(contents) {
+  return {
+    affected: contents['download/shape.zip']?.url ?? null,
+    contours: contents['download/cont_mmi.json']?.url ?? contents['download/cont_mi.json']?.url ?? null,
+    rupture: contents['download/rupture.json']?.url ?? null,
+  }
+}
+
+function createEmptyShakeMapState() {
+  return {
+    available: false,
+    status: 'Select an earthquake with ShakeMap data.',
+    product: null,
+    assets: {
+      affected: null,
+      contours: null,
+      rupture: null,
+    },
+    toggles: {
+      affected: false,
+      contours: false,
+      rupture: false,
+    },
+    data: {
+      affected: null,
+      contours: null,
+      rupture: null,
+    },
+    loading: {
+      affected: null,
+      contours: null,
+      rupture: null,
+    },
+    selectedFeature: null,
+  }
+}
+
+function startPolling() {
+  window.clearInterval(refreshTimer)
+  refreshTimer = window.setInterval(refreshFeed, REFRESH_INTERVAL_MS)
 }
 
 function populateFeedOptions() {
@@ -773,6 +1285,14 @@ function emptyFeatureCollection() {
   }
 }
 
+function makeRow(label, value, helpKey = label) {
+  return { label, value, helpKey }
+}
+
+function makeGlossaryEntry(description, fieldKey, source) {
+  return { description, fieldKey, source }
+}
+
 function magnitudeColor() {
   return [
     'interpolate',
@@ -795,6 +1315,55 @@ function magnitudeRadius(stops) {
     4, stops[2],
     6, stops[3],
   ]
+}
+
+function resolveShakeMapValue(properties) {
+  const candidateKeys = ['value', 'valuec', 'VAL', 'MMI', 'PARAMVALUE', 'GRID_CODE', 'weight']
+
+  for (const key of candidateKeys) {
+    const value = normalizeNumber(properties[key])
+    if (value !== null) {
+      return value
+    }
+  }
+
+  const firstNumeric = Object.values(properties).map(normalizeNumber).find((value) => value !== null)
+  return firstNumeric ?? 0
+}
+
+function describeShakeMapFeature(kind, properties, displayValue) {
+  if (kind === 'affected') {
+    return `Estimated shaking area around MMI ${displayValue.toFixed(1)}`
+  }
+
+  if (kind === 'contours') {
+    return `MMI contour ${displayValue.toFixed(1)}`
+  }
+
+  return properties['rupture type'] ?? 'Rupture geometry'
+}
+
+function normalizeNumber(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value
+  }
+
+  if (typeof value === 'string' && value.trim() !== '' && !Number.isNaN(Number(value))) {
+    return Number(value)
+  }
+
+  return null
+}
+
+function colorForShakeMapValue(value) {
+  if (value >= 8) return '#7c0f33'
+  if (value >= 7) return '#a11d34'
+  if (value >= 6) return '#d84b3c'
+  if (value >= 5) return '#ef8a3a'
+  if (value >= 4) return '#f0b43c'
+  if (value >= 3) return '#f3d46b'
+  if (value >= 2) return '#c7e98a'
+  return '#dfe6ff'
 }
 
 function formatTime(value) {
@@ -858,6 +1427,22 @@ function formatBbox(value) {
   }
 
   return value.join(', ')
+}
+
+function stringifyValue(value) {
+  if (typeof value === 'string') {
+    return value
+  }
+
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value)
+  }
+
+  if (value instanceof Date) {
+    return value.toISOString()
+  }
+
+  return JSON.stringify(value)
 }
 
 function escapeHtml(value) {

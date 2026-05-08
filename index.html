@@ -80,6 +80,38 @@
       </aside>
 
       <main id="map" aria-label="Earthquake map"></main>
+
+      <div class="layer-control" id="layer-control">
+        <button id="layer-control-toggle" class="layer-control-toggle" type="button" aria-expanded="false" aria-controls="layer-control-panel">
+          Layers
+        </button>
+
+        <section id="layer-control-panel" class="layer-control-panel" hidden aria-label="Map layers">
+          <div class="layer-control-header">
+            <p class="eyebrow">Layers</p>
+            <h2>ShakeMap</h2>
+          </div>
+
+          <p id="layer-control-status" class="layer-control-status">
+            Select an earthquake with ShakeMap data.
+          </p>
+
+          <div class="layer-toggle-list">
+            <label class="layer-toggle">
+              <input id="toggle-affected" type="checkbox" disabled />
+              <span>Affected Area</span>
+            </label>
+            <label class="layer-toggle">
+              <input id="toggle-contours" type="checkbox" disabled />
+              <span>Intensity Contours</span>
+            </label>
+            <label class="layer-toggle">
+              <input id="toggle-rupture" type="checkbox" disabled />
+              <span>Rupture</span>
+            </label>
+          </div>
+        </section>
+      </div>
     </div>
 
     <script type="module" src="/src/main.js"></script>

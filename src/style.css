@@ -75,6 +75,20 @@ body {
   cursor: pointer;
 }
 
+.panel-toggle,
+.layer-control-toggle,
+.help-toggle,
+.inline-help-toggle {
+  transition: background-color 140ms ease, border-color 140ms ease, transform 140ms ease;
+}
+
+.panel-toggle:hover,
+.layer-control-toggle:hover,
+.help-toggle:hover,
+.inline-help-toggle:hover {
+  background: rgba(79, 134, 247, 0.16);
+}
+
 .panel-body {
   display: grid;
   gap: 1rem;
@@ -212,6 +226,85 @@ dd {
   display: flex;
   flex-direction: column;
   gap: 0.75rem;
+}
+
+.layer-control {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1;
+  display: grid;
+  justify-items: end;
+  gap: 0.65rem;
+}
+
+.layer-control-toggle {
+  padding: 0.7rem 0.95rem;
+  border: 1px solid rgba(16, 36, 61, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 44px rgba(16, 36, 61, 0.15);
+  color: #10243d;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+  backdrop-filter: blur(10px);
+}
+
+.layer-control-panel {
+  width: min(18rem, calc(100vw - 2rem));
+  display: grid;
+  gap: 0.85rem;
+  padding: 0.95rem;
+  border: 1px solid rgba(16, 36, 61, 0.12);
+  border-radius: 1rem;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 18px 44px rgba(16, 36, 61, 0.15);
+  backdrop-filter: blur(10px);
+}
+
+.layer-control-header {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.layer-control-status {
+  margin: 0;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: #4c6078;
+}
+
+.layer-toggle-list {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.layer-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid rgba(16, 36, 61, 0.08);
+  border-radius: 0.8rem;
+  background: rgba(255, 255, 255, 0.7);
+  font-size: 0.92rem;
+  font-weight: 600;
+}
+
+.layer-toggle input {
+  width: 1rem;
+  height: 1rem;
+  margin: 0;
+}
+
+.layer-toggle:has(input:disabled) {
+  color: #8190a1;
+}
+
+.layer-toggle:has(input:checked) {
+  border-color: rgba(79, 134, 247, 0.34);
+  background: rgba(79, 134, 247, 0.08);
 }
 
 .details-heading {
@@ -496,5 +589,14 @@ dd {
     left: 1rem;
     width: auto;
     max-height: min(72vh, 42rem);
+  }
+
+  .layer-control {
+    right: 0.75rem;
+    bottom: 0.75rem;
+  }
+
+  .layer-control-panel {
+    width: min(17rem, calc(100vw - 1.5rem));
   }
 }
